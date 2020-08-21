@@ -13,50 +13,27 @@
 #include <jpeglib.h>
 #include <assert.h>
 
-// Naive images_equal (needs intrinsics to vectorice!)
-bool images_equal(AVFrame *f1, AVFrame *f2) {
-  if(f1->width != f2->width || f1->height != f2->height) return false;
+bool write_frame_yuv(AVFrame *f, char* output_path) {
+  FILE *fp = fopen(output_path, "wb");
+  if(!fp) return false;
   
-  uint8_t *img1 = f1->data[0];
-  uint8_t *img2 = f2->data[0];
+  int size = av_image_get_buffer_size(f->format, f->width, f->height, 16);
+  fwrite(f->data[0], 1, size, fp);
   
-  for(int i=0; i < f1->width * f1->height; i++) {
-    if(img1[i] != img2[i])return false;
-  }
+  fclose(fp);
   
   return true;
 }
 
-AVFrame *read_frame_yuv(char* input_path) {
-  FILE *fp = fopen(input_path, "r");
-  if(!fp) return NULL;
-  
-  AVFrame* dst = av_frame_alloc();
-  int width = 1920;
-  int height = 1080;
-  enum AVPixelFormat dst_pixfmt = AV_PIX_FMT_YUV420P;
-  int numBytes = avpicture_get_size(dst_pixfmt, width, height);
-  uint8_t *buffer = (uint8_t *) av_malloc(numBytes * sizeof(uint8_t));
-  avpicture_fill( (AVPicture *)dst, buffer, dst_pixfmt, width, height);
-  
-  fread(dst->data[0], 1, numBytes, fp);
-  dst->format = (int)dst_pixfmt;
-  dst->width = width;
-  dst->height = height;
-  
-  fclose(fp);
-  
-  return dst;
-}
-
 int main(int argc, char **argv) {  
   if (argc < 3) {
-    printf("Usage: %s input_video input_img\n", argv[0]);
+    printf("Usage: %s input_video frame output_img\n", argv[0]);
     return EXIT_FAILURE;
   }
-  
+    
   char* video_path = argv[1];
-  char* image_path = argv[2];
+  int frame_num = atoi(argv[2]);
+  char* output_path = argv[3];
   AVCodec *codec = NULL;
   AVCodecContext *ctx= NULL;
   AVCodecParameters *origin_par = NULL;
@@ -71,8 +48,9 @@ int main(int argc, char **argv) {
   int i = 0;
   int current_frame = 0;
   int result;
-  bool end = 0;
-  AVFrame * img = read_frame_yuv(image_path);
+  bool end = 0; 
+  
+  
  
   if ((result = avformat_open_input(&fmt_ctx, video_path, NULL, NULL)) < 0) {
     av_log(NULL, AV_LOG_ERROR, "avformat_open_input\n");
@@ -122,9 +100,6 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
   
-  assert(ctx->pix_fmt == AV_PIX_FMT_YUV420P);
-
-  i = 0;
   av_init_packet(&pkt);
   do {
     if (!end) {
@@ -137,30 +112,30 @@ int main(int argc, char **argv) {
         pkt.size = 0;
     }
     if (pkt.stream_index == video_stream || end) {
-        got_frame = 0;
-        if (pkt.pts == AV_NOPTS_VALUE)
-            pkt.pts = pkt.dts = i;
-        result = avcodec_decode_video2(ctx, fr, &got_frame, &pkt);
-        if (result < 0) {
-            av_log(NULL, AV_LOG_ERROR, "Error decoding frame\n");
-            return result;
-        }
-        if (got_frame) {    
-            current_frame++; 
-            number_of_written_bytes = av_image_copy_to_buffer(byte_buffer, byte_buffer_size,
-                                    (const uint8_t* const *)fr->data, (const int*) fr->linesize,
-                                    ctx->pix_fmt, ctx->width, ctx->height, 1);
-            if (number_of_written_bytes < 0) {
-              av_log(NULL, AV_LOG_ERROR, "av_image_copy_to_buffer\n");
-              return EXIT_FAILURE;
-            }            
-            printf("Frame %d ", current_frame);
-            if(images_equal(fr, img)) printf("MATCHES\n");
-            else printf("\n");
-        }
-        av_packet_unref(&pkt);
-        av_init_packet(&pkt);
-    }
+      got_frame = 0;
+      if (pkt.pts == AV_NOPTS_VALUE) pkt.pts = pkt.dts = i;
+      result = avcodec_decode_video2(ctx, fr, &got_frame, &pkt);
+      if (result < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Error decoding frame\n");
+        return result;
+      }     
+      if (got_frame) {
+        current_frame++;        
+        if (frame_num == current_frame) {
+          number_of_written_bytes = av_image_copy_to_buffer(byte_buffer, byte_buffer_size,
+                                   (const uint8_t* const *)fr->data, (const int*) fr->linesize,
+                                   ctx->pix_fmt, ctx->width, ctx->height, 1);
+          if (number_of_written_bytes < 0) {
+            av_log(NULL, AV_LOG_ERROR, "av_image_copy_to_buffer\n");
+            return EXIT_FAILURE;
+          }                        
+          write_frame_yuv(fr, output_path);                        
+          end = true;
+        }         
+      }
+      av_packet_unref(&pkt);
+      av_init_packet(&pkt);
+    }    
     i++;
   } while (!end || got_frame);
 

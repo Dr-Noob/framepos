@@ -1,0 +1,12 @@
+With mpv, search for the target image. When you find it, Ctrl + O will display the current frame (use https://github.com/mpv-player/mpv/issues/3428). Lets say its
+the frame N=120
+
+With cutframe, cut the desired frame as plain decoded YUV (./cutframe test.mkv 120 out.yuv).
+
+Then, framepos will tell you that the image out.yuv is located in frame 120 (./framepos test.mkv out.yuv)
+
+You can check it with:
+
+ffmpeg -i test.mkv -vf "select=eq(n\,119)" -vframes 1 out.png
+
+You can see that out.png is the same as the frame 120 in the input video
