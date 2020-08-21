@@ -13,10 +13,10 @@
 #include <jpeglib.h>
 #include <assert.h>
 
+#define MAX_PIX_FMT_STR_LENGTH 10
+
 // Naive images_equal (needs intrinsics to vectorice!)
 bool images_equal(AVFrame *f1, AVFrame *f2) {
-  if(f1->width != f2->width || f1->height != f2->height) return false;
-  
   uint8_t *img1 = f1->data[0];
   uint8_t *img2 = f2->data[0];
   
@@ -27,43 +27,69 @@ bool images_equal(AVFrame *f1, AVFrame *f2) {
   return true;
 }
 
-AVFrame *read_frame_yuv(char* input_path) {
-  FILE *fp = fopen(input_path, "r");
-  if(!fp) return NULL;
-  
-  AVFrame* dst = av_frame_alloc();
-  int width = 1920;
-  int height = 1080;
+AVFrame *read_frame_yuv(char* input_path, int w, int h) {
+  FILE *fp;
+  AVFrame* dst;
+  uint8_t *buffer;
+  int ret = 0;
   enum AVPixelFormat dst_pixfmt = AV_PIX_FMT_YUV420P;
-  int numBytes = avpicture_get_size(dst_pixfmt, width, height);
-  uint8_t *buffer = (uint8_t *) av_malloc(numBytes * sizeof(uint8_t));
-  avpicture_fill( (AVPicture *)dst, buffer, dst_pixfmt, width, height);
   
-  fread(dst->data[0], 1, numBytes, fp);
-  dst->format = (int)dst_pixfmt;
-  dst->width = width;
-  dst->height = height;
+  if((fp = fopen(input_path, "r")) == NULL) {
+    perror("fopen");
+    return NULL;
+  }
   
-  fclose(fp);
+  if ((dst = av_frame_alloc()) == NULL) {
+    av_log(NULL, AV_LOG_ERROR, "av_frame_alloc\n");
+    return NULL;
+  }
+  
+  int n = avpicture_get_size(dst_pixfmt, w, h);
+  
+  buffer = av_malloc(n * sizeof(uint8_t));
+  avpicture_fill((AVPicture *)dst, buffer, dst_pixfmt, w, h);  
+  
+  
+  if((ret = fread(dst->data[0], sizeof(uint8_t), n, fp)) < n) {
+    printf("fread: Read %d, expected to read %d\n", ret, n); 
+    return NULL;    
+  }
+  
+  dst->format = dst_pixfmt;
+  dst->width = w;
+  dst->height = h;
+  
+  if(fclose(fp) != 0) {
+    perror("fclose");
+    return NULL;    
+  }
   
   return dst;
 }
 
 int main(int argc, char **argv) {  
-  if (argc < 3) {
-    printf("Usage: %s input_video input_img\n", argv[0]);
+  if (argc < 5) {
+    printf("Usage: %s input_video input_img image_width image_height\n", argv[0]);
     return EXIT_FAILURE;
   }
   
   char* video_path = argv[1];
   char* image_path = argv[2];
+  int image_width = atoi(argv[3]);
+  int image_height = atoi(argv[4]);
+  
   AVCodec *codec = NULL;
   AVCodecContext *ctx= NULL;
-  AVCodecParameters *origin_par = NULL;
+  AVCodecParameters *origin_par = NULL;  
+  AVFormatContext *fmt_ctx = NULL;  
   AVFrame *fr = NULL;
-  uint8_t *byte_buffer = NULL;
+  AVFrame *img = read_frame_yuv(image_path, image_width, image_height);
   AVPacket pkt;
-  AVFormatContext *fmt_ctx = NULL;
+  
+  if(img == NULL)
+    return EXIT_FAILURE;
+  
+  uint8_t *byte_buffer = NULL;
   int number_of_written_bytes;
   int video_stream;
   int got_frame = 0;
@@ -71,8 +97,8 @@ int main(int argc, char **argv) {
   int i = 0;
   int current_frame = 0;
   int result;
-  bool end = 0;
-  AVFrame * img = read_frame_yuv(image_path);
+  bool end = 0;  
+  char* buf = malloc(sizeof(char) * MAX_PIX_FMT_STR_LENGTH);
  
   if ((result = avformat_open_input(&fmt_ctx, video_path, NULL, NULL)) < 0) {
     av_log(NULL, AV_LOG_ERROR, "avformat_open_input\n");
@@ -111,6 +137,11 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
   
+  if(ctx->width != image_width || ctx->height != image_height) {
+    printf("Input video and image dimensions do not match: %dx%d vs %dx%d\n", ctx->width, ctx->height, image_width, image_height);
+    return EXIT_FAILURE;
+  }
+  
   if ((fr = av_frame_alloc()) == NULL) {
     av_log(NULL, AV_LOG_ERROR, "av_frame_alloc\n");
     return EXIT_FAILURE;
@@ -122,7 +153,9 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
   
-  assert(ctx->pix_fmt == AV_PIX_FMT_YUV420P);
+  av_get_pix_fmt_string(buf, MAX_PIX_FMT_STR_LENGTH, ctx->pix_fmt);
+  printf("Input video PIX_FMT: %s\n", buf);
+  if(ctx->pix_fmt != AV_PIX_FMT_YUV420P) printf("WARNING: %s was not designed to work with format different than yuv420p\n", argv[0]);
 
   i = 0;
   av_init_packet(&pkt);
@@ -154,9 +187,8 @@ int main(int argc, char **argv) {
               av_log(NULL, AV_LOG_ERROR, "av_image_copy_to_buffer\n");
               return EXIT_FAILURE;
             }            
-            printf("Frame %d ", current_frame);
-            if(images_equal(fr, img)) printf("MATCHES\n");
-            else printf("\n");
+            if(images_equal(fr, img))
+              printf("%d\n", current_frame);
         }
         av_packet_unref(&pkt);
         av_init_packet(&pkt);
