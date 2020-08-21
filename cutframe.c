@@ -1,26 +1,32 @@
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <stdbool.h>
-#include <unistd.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <png.h>
 
 #include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
-#include <libswscale/swscale.h>
-#include <jpeglib.h>
-#include <assert.h>
+
+#define MAX_PIX_FMT_STR_LENGTH 10
+#define N_FRAMES_DEBUG        100
 
 bool write_frame_yuv(AVFrame *f, char* output_path) {
-  FILE *fp = fopen(output_path, "wb");
-  if(!fp) return false;
+  FILE *fp;
+  uint32_t n = av_image_get_buffer_size(f->format, f->width, f->height, 16);
+  uint32_t ret;
   
-  int size = av_image_get_buffer_size(f->format, f->width, f->height, 16);
-  fwrite(f->data[0], 1, size, fp);
+  if((fp = fopen(output_path, "w")) == NULL) {
+    perror("fopen");
+    return false;
+  }
   
-  fclose(fp);
+  
+  if((ret = fwrite(f->data[0], sizeof(uint8_t), n, fp)) < n) {
+    printf("fwrite: Wrote %d, expected to write %d\n", ret, n); 
+    return false;    
+  }
+  
+  if(fclose(fp) != 0) {
+    perror("fclose");
+    return false;    
+  }
   
   return true;
 }
@@ -34,23 +40,21 @@ int main(int argc, char **argv) {
   char* video_path = argv[1];
   int frame_num = atoi(argv[2]);
   char* output_path = argv[3];
+  
   AVCodec *codec = NULL;
   AVCodecContext *ctx= NULL;
   AVCodecParameters *origin_par = NULL;
-  AVFrame *fr = NULL;
-  uint8_t *byte_buffer = NULL;
-  AVPacket pkt;
   AVFormatContext *fmt_ctx = NULL;
-  int number_of_written_bytes;
+  AVFrame *fr = NULL;
+  AVPacket pkt;
+  
   int video_stream;
   int got_frame = 0;
-  int byte_buffer_size;
   int i = 0;
   int current_frame = 0;
   int result;
-  bool end = 0; 
-  
-  
+  bool end = 0;
+  char* buf = malloc(sizeof(char) * MAX_PIX_FMT_STR_LENGTH);
  
   if ((result = avformat_open_input(&fmt_ctx, video_path, NULL, NULL)) < 0) {
     av_log(NULL, AV_LOG_ERROR, "avformat_open_input\n");
@@ -88,15 +92,13 @@ int main(int argc, char **argv) {
     av_log(ctx, AV_LOG_ERROR, "avcodec_open2\n");
     return EXIT_FAILURE;
   }
+    
+  av_get_pix_fmt_string(buf, MAX_PIX_FMT_STR_LENGTH, ctx->pix_fmt);
+  printf("Input PIX_FMT: %s\n", buf);
+  if(ctx->pix_fmt != AV_PIX_FMT_YUV420P) printf("WARNING: %s was not designed to work with format different than yuv420p\n", argv[0]);
   
   if ((fr = av_frame_alloc()) == NULL) {
     av_log(NULL, AV_LOG_ERROR, "av_frame_alloc\n");
-    return EXIT_FAILURE;
-  }
-
-  byte_buffer_size = av_image_get_buffer_size(ctx->pix_fmt, ctx->width, ctx->height, 16);
-  if ((byte_buffer = av_malloc(byte_buffer_size)) == NULL) {
-    av_log(NULL, AV_LOG_ERROR, "av_malloc\n");
     return EXIT_FAILURE;
   }
   
@@ -113,24 +115,23 @@ int main(int argc, char **argv) {
     }
     if (pkt.stream_index == video_stream || end) {
       got_frame = 0;
-      if (pkt.pts == AV_NOPTS_VALUE) pkt.pts = pkt.dts = i;
+      if (pkt.pts == AV_NOPTS_VALUE) pkt.pts = i;
       result = avcodec_decode_video2(ctx, fr, &got_frame, &pkt);
       if (result < 0) {
         av_log(NULL, AV_LOG_ERROR, "Error decoding frame\n");
         return result;
       }     
       if (got_frame) {
-        current_frame++;        
-        if (frame_num == current_frame) {
-          number_of_written_bytes = av_image_copy_to_buffer(byte_buffer, byte_buffer_size,
-                                   (const uint8_t* const *)fr->data, (const int*) fr->linesize,
-                                   ctx->pix_fmt, ctx->width, ctx->height, 1);
-          if (number_of_written_bytes < 0) {
-            av_log(NULL, AV_LOG_ERROR, "av_image_copy_to_buffer\n");
+        current_frame++;  
+        if(current_frame % N_FRAMES_DEBUG == 0) { 
+          printf("\r%d decoded frames...", current_frame);
+          fflush(stdout);
+        }
+        if (frame_num == current_frame) { 
+          if(!write_frame_yuv(fr, output_path)) 
             return EXIT_FAILURE;
-          }                        
-          write_frame_yuv(fr, output_path);                        
-          end = true;
+          printf("\nFrame %d cut successfully\n", frame_num);
+          end = true;          
         }         
       }
       av_packet_unref(&pkt);
@@ -143,5 +144,4 @@ int main(int argc, char **argv) {
   av_frame_free(&fr);
   avformat_close_input(&fmt_ctx);
   avcodec_free_context(&ctx);
-  av_freep(&byte_buffer);
 }

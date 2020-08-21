@@ -1,6 +1,6 @@
 CXX=gcc
 
-CXXFLAGS=-O0 -g -std=c99 -Wno-deprecated-declarations
+CXXFLAGS=-O2 -std=c99 -Wno-deprecated-declarations
 SANITY_FLAGS=-Wall -Wextra -Werror -pedantic -fstack-protector-all -pedantic -Wfloat-equal -Wshadow -Wpointer-arith -Wstrict-overflow=5 -Wformat=2
 
 # use pkg-config for getting CFLAGS and LDLIBS
@@ -14,13 +14,16 @@ FFMPEG_LIBS=libavdevice                        \
             
 CFLAGS := $(shell pkg-config --cflags $(FFMPEG_LIBS))
 LDLIBS := $(shell pkg-config --libs $(FFMPEG_LIBS))
-OUTPUT=framepos
+FRAMEPOS=framepos
+CUTFRAME=cutframe
 
-$(OUTPUT): Makefile framepos.c
-	$(CXX) $(CXXFLAGS) $(SANITY_FLAGS) $(CFLAGS) $(LDLIBS) framepos.c -o $@
+all: $(FRAMEPOS) $(CUTFRAME)
 
-run:
-	./$(OUTPUT)
+$(FRAMEPOS): Makefile $(FRAMEPOS).c
+	$(CXX) $(CXXFLAGS) $(SANITY_FLAGS) $(CFLAGS) $(LDLIBS) $(FRAMEPOS).c -o $@
+	
+$(CUTFRAME): Makefile $(CUTFRAME).c
+	$(CXX) $(CXXFLAGS) $(SANITY_FLAGS) $(CFLAGS) $(LDLIBS) $(CUTFRAME).c -o $@
 
 clean:
-	@rm $(OUTPUT)
+	@rm $(FRAMEPOS) $(CUTFRAME)
