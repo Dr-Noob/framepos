@@ -2,16 +2,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
-#include <unistd.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <png.h>
+#include <assert.h>
 
 #include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
-#include <libswscale/swscale.h>
-#include <jpeglib.h>
-#include <assert.h>
 
 #include "args.h"
 
@@ -90,6 +84,30 @@ AVFrame *read_frame_yuv(char* input_path, int w, int h) {
   return dst;
 }
 
+void print_images_equal(int img, int frame, double fps) {
+  // format XX:XX:XX.XX
+  char* time = malloc(sizeof(char) * 12);
+    
+  int total_secs = frame / fps;
+  int total_min = total_secs / 60;
+  
+  uint8_t ms = frame % (int)fps;
+  uint8_t seg = total_secs % 60;
+  uint8_t min = total_min % 60;
+  uint8_t hou = total_min / 60;
+  
+  assert(ms < 60);
+  assert(seg < 60);
+  assert(min < 60);
+  assert(hou < 60);
+  
+  sprintf(time, "%02d:%02d:%02d.%02d", hou, min, seg, ms);
+  
+  fprintf(stderr, "[IMG %d]: %s\n", img, time);    
+  
+  free(time);
+}            
+
 void print_help(char *argv[]) {
   printf("Usage: %s [OPTIONS]...\n\
 Options: \n\
@@ -130,8 +148,11 @@ int main(int argc, char **argv) {
   int video_stream;
   int byte_buffer_size;
   int current_frame = 0;
-  int result;  
+  int result; 
+  double fps;
   char* buf = malloc(sizeof(char) * MAX_PIX_FMT_STR_LENGTH);
+  
+  av_log_set_level(AV_LOG_QUIET);
  
   if ((result = avformat_open_input(&fmt_ctx, video_path, NULL, NULL)) < 0) {
     av_log(NULL, AV_LOG_ERROR, "avformat_open_input\n");
@@ -172,6 +193,8 @@ int main(int argc, char **argv) {
     av_log(ctx, AV_LOG_ERROR, "avcodec_open2\n");
     return EXIT_FAILURE;
   }
+ 
+  fps = av_q2d(av_guess_frame_rate(fmt_ctx, fmt_ctx->streams[video_stream], NULL));  
   
   printf("%s dimensions: %dx%d\n", video_path, ctx->width, ctx->height);
   
@@ -198,6 +221,7 @@ int main(int argc, char **argv) {
   
   printf("Using codec: %s\n", fmt_ctx->video_codec->name);
   av_get_pix_fmt_string(buf, MAX_PIX_FMT_STR_LENGTH, ctx->pix_fmt);
+  printf("Input video: %.2ffps\n", fps);
   printf("Input video PIX_FMT: %s\n", buf);
   if(ctx->pix_fmt != AV_PIX_FMT_YUV420P) printf("WARNING: %s was not designed to work with format different than yuv420p\n", argv[0]);
 
@@ -230,7 +254,7 @@ int main(int argc, char **argv) {
         }            
         for(int i=0; i < n_images; i++) {
           if(images_equal(fr, imgs[i])) {
-            printf("[IMG %d]: FRAME %d MATCHES\n", i, current_frame);                
+            print_images_equal(i, current_frame, fps);
           }
         }
       }

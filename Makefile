@@ -1,7 +1,7 @@
 CXX=gcc
 
 CXXFLAGS=-O2 -std=c99
-SANITY_FLAGS=-Wall -Wextra -Werror -pedantic -fstack-protector-all -pedantic -Wfloat-equal -Wshadow -Wpointer-arith -Wstrict-overflow=5 -Wformat=2
+SANITY_FLAGS=-Wall -Wextra -Werror -pedantic -fstack-protector-all -pedantic -Wfloat-equal -Wshadow -Wpointer-arith -Wstrict-overflow=5 -Wformat=2 -Wno-format-overflow
 
 # use pkg-config for getting CFLAGS and LDLIBS
 FFMPEG_LIBS=libavdevice                        \
