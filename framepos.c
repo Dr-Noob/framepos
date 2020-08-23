@@ -114,14 +114,15 @@ int main(int argc, char **argv) {
   }
   
   char* video_path = get_video_path();
-  char* image_path = get_image_path(); 
+  char** images_paths = get_images_paths(); 
   int n_threads = get_n_threads();
+  int n_images = get_n_images();
     
   AVCodecContext *ctx= NULL;
   AVCodecParameters *origin_par = NULL;  
   AVFormatContext *fmt_ctx = NULL;  
   AVFrame *fr = NULL;
-  AVFrame *img = NULL;
+  AVFrame **imgs = malloc(sizeof(AVFrame *) * n_images);
   AVPacket pkt;
   
   uint8_t *byte_buffer = NULL;
@@ -173,11 +174,16 @@ int main(int argc, char **argv) {
   }
   
   printf("%s dimensions: %dx%d\n", video_path, ctx->width, ctx->height);
-  printf("Assuming that %s has the same dimensions...\n", image_path);
   
-  if((img = read_frame_yuv(image_path, ctx->width, ctx->height)) == NULL) {
-    return EXIT_FAILURE;    
+  for(int i=0; i < n_images; i++) {
+    printf("Assuming that %s has the same dimensions...\n", images_paths[i]);
+  
+    if((imgs[i] = read_frame_yuv(images_paths[i], ctx->width, ctx->height)) == NULL) {
+      return EXIT_FAILURE;    
+    }
   }
+  
+  printf("Loaded %d images\n", n_images);
   
   if ((fr = av_frame_alloc()) == NULL) {
     av_log(NULL, AV_LOG_ERROR, "av_frame_alloc\n");
@@ -222,9 +228,10 @@ int main(int argc, char **argv) {
           av_log(NULL, AV_LOG_ERROR, "av_image_copy_to_buffer\n");
           return EXIT_FAILURE;
         }            
-        if(images_equal(fr, img)) {
-          printf("FRAME %d MATCHES\n", current_frame);                
-          return EXIT_SUCCESS;
+        for(int i=0; i < n_images; i++) {
+          if(images_equal(fr, imgs[i])) {
+            printf("[IMG %d]: FRAME %d MATCHES\n", i, current_frame);                
+          }
         }
       }
       

@@ -1,6 +1,6 @@
 CXX=gcc
 
-CXXFLAGS=-O0 -g -std=c99
+CXXFLAGS=-O2 -std=c99
 SANITY_FLAGS=-Wall -Wextra -Werror -pedantic -fstack-protector-all -pedantic -Wfloat-equal -Wshadow -Wpointer-arith -Wstrict-overflow=5 -Wformat=2
 
 # use pkg-config for getting CFLAGS and LDLIBS
