@@ -13,6 +13,8 @@
 #include <jpeglib.h>
 #include <assert.h>
 
+#include "args.h"
+
 #define MAX_PIX_FMT_STR_LENGTH 10
 #define N_FRAMES_DEBUG       1000
 #define THRESHOLD             100
@@ -27,8 +29,6 @@ void writePlane(FILE *f, uint8_t *data, ptrdiff_t linesize, int w, int h) {
 bool write_frame_yuv(AVFrame *f, char* output_path) {
   FILE *fp = fopen(output_path, "wb");
   if(!fp) return false;
-  
-  int size = av_image_get_buffer_size(f->format, f->width, f->height, 16);
   
   writePlane(fp, f->data[0], f->linesize[0], f->width, f->height);
   writePlane(fp, f->data[1], f->linesize[1], f->width / 2, f->height / 2);
@@ -90,36 +90,46 @@ AVFrame *read_frame_yuv(char* input_path, int w, int h) {
   return dst;
 }
 
+void print_help(char *argv[]) {
+  printf("Usage: %s [OPTIONS]...\n\
+Options: \n\
+  --video    [MANDATORY] Path to the input video. \n\
+  --image    [MANDATORY] Path to the input image, which must be in YUV raw format. The specific \n\
+                         YUV encoding must match the input video's. E.g, if video is yuv420p,   \n\
+                         image must be in yuv420p. Image and video's dimensions must match.     \n\
+  --threads  [OPTIONAL]  Set the number of threads to use in the decoder. Default value is the  \n\
+                         max number of threads supported in the system. \n\
+  --help     [OPTIONAL]  Prints this help and exit \n",
+         
+  argv[0]);
+}
+
 int main(int argc, char **argv) {  
-  if (argc < 5) {
-    printf("Usage: %s input_video input_img image_width image_height\n", argv[0]);
+  if(!parse_args(argc,argv))
     return EXIT_FAILURE;
+
+  if(show_help()) {
+    print_help(argv);
+    return EXIT_SUCCESS;
   }
   
-  char* video_path = argv[1];
-  char* image_path = argv[2];
-  int image_width = atoi(argv[3]);
-  int image_height = atoi(argv[4]);
+  char* video_path = get_video_path();
+  char* image_path = get_image_path(); 
+  int n_threads = get_n_threads();
     
   AVCodecContext *ctx= NULL;
   AVCodecParameters *origin_par = NULL;  
   AVFormatContext *fmt_ctx = NULL;  
   AVFrame *fr = NULL;
-  AVFrame *img = read_frame_yuv(image_path, image_width, image_height);
+  AVFrame *img = NULL;
   AVPacket pkt;
-  
-  if(img == NULL)
-    return EXIT_FAILURE;
   
   uint8_t *byte_buffer = NULL;
   int number_of_written_bytes;
   int video_stream;
-  int got_frame = 0;
   int byte_buffer_size;
   int current_frame = 0;
-  int result;
-  bool end = 0;  
-  int n_threads = 8;
+  int result;  
   char* buf = malloc(sizeof(char) * MAX_PIX_FMT_STR_LENGTH);
  
   if ((result = avformat_open_input(&fmt_ctx, video_path, NULL, NULL)) < 0) {
@@ -162,9 +172,11 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
   
-  if(ctx->width != image_width || ctx->height != image_height) {
-    printf("Input video and image dimensions do not match: %dx%d vs %dx%d\n", ctx->width, ctx->height, image_width, image_height);
-    return EXIT_FAILURE;
+  printf("%s dimensions: %dx%d\n", video_path, ctx->width, ctx->height);
+  printf("Assuming that %s has the same dimensions...\n", image_path);
+  
+  if((img = read_frame_yuv(image_path, ctx->width, ctx->height)) == NULL) {
+    return EXIT_FAILURE;    
   }
   
   if ((fr = av_frame_alloc()) == NULL) {
@@ -184,6 +196,8 @@ int main(int argc, char **argv) {
   if(ctx->pix_fmt != AV_PIX_FMT_YUV420P) printf("WARNING: %s was not designed to work with format different than yuv420p\n", argv[0]);
 
   av_init_packet(&pkt);
+  
+  printf("Using %d threads to decode\n", n_threads);
   
   // https://stackoverflow.com/questions/44711921/ffmpeg-failed-to-call-avcodec-send-packet
   while (av_read_frame(fmt_ctx, &pkt) >= 0) {
