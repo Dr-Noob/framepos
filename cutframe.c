@@ -7,26 +7,24 @@
 #define MAX_PIX_FMT_STR_LENGTH 10
 #define N_FRAMES_DEBUG        100
 
+void writePlane(FILE *f, uint8_t *data, ptrdiff_t linesize, int w, int h) {
+  for (int y = 0; y < h; y++) {
+    fwrite(data, 1, w, f);
+    data += linesize;
+  }
+}
+
 bool write_frame_yuv(AVFrame *f, char* output_path) {
-  FILE *fp;
-  uint32_t n = av_image_get_buffer_size(f->format, f->width, f->height, 16);
-  uint32_t ret;
+  FILE *fp = fopen(output_path, "wb");
+  if(!fp) return false;
   
-  if((fp = fopen(output_path, "w")) == NULL) {
-    perror("fopen");
-    return false;
-  }
+  int size = av_image_get_buffer_size(f->format, f->width, f->height, 16);
   
+  writePlane(fp, f->data[0], f->linesize[0], f->width, f->height);
+  writePlane(fp, f->data[1], f->linesize[1], f->width / 2, f->height / 2);
+  writePlane(fp, f->data[2], f->linesize[2], f->width / 2, f->height / 2);
   
-  if((ret = fwrite(f->data[0], sizeof(uint8_t), n, fp)) < n) {
-    printf("fwrite: Wrote %d, expected to write %d\n", ret, n); 
-    return false;    
-  }
-  
-  if(fclose(fp) != 0) {
-    perror("fclose");
-    return false;    
-  }
+  fclose(fp);
   
   return true;
 }
@@ -54,6 +52,7 @@ int main(int argc, char **argv) {
   int current_frame = 0;
   int result;
   bool end = 0;
+  int n_threads = 8;
   char* buf = malloc(sizeof(char) * MAX_PIX_FMT_STR_LENGTH);
  
   if ((result = avformat_open_input(&fmt_ctx, video_path, NULL, NULL)) < 0) {
@@ -87,6 +86,9 @@ int main(int argc, char **argv) {
     av_log(NULL, AV_LOG_ERROR, "avcodec_parameters_to_context\n");
     return EXIT_FAILURE;
   }
+  
+  ctx->thread_count = n_threads;
+  ctx->thread_type = FF_THREAD_FRAME;
 
   if ((result = avcodec_open2(ctx, codec, NULL)) < 0) {
     av_log(ctx, AV_LOG_ERROR, "avcodec_open2\n");
