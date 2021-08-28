@@ -123,7 +123,7 @@ void print_images_equal(int img, int64_t pts, int frame) {
 
   sprintf(time, "%02d:%02d:%02d.%03d", hou, min, seg, ms);
 
-  fprintf(stderr, "[IMG %d]: %s (frame %d)\n", img, time, frame);
+  printf("\r[IMG %d]: %s (frame %d)\n", img, time, frame);
 
   free(time);
 }
@@ -171,6 +171,7 @@ int main(int argc, char **argv) {
   int current_frame = 0;
   int result;
   double fps;
+  bool prev_frame_matches[n_images];
   char* buf = malloc(sizeof(char) * MAX_PIX_FMT_STR_LENGTH);
 
   av_log_set_level(AV_LOG_QUIET);
@@ -222,6 +223,7 @@ int main(int argc, char **argv) {
 
   for(int i=0; i < n_images; i++) {
     printf("Assuming that %s has the same dimensions...\n", images_paths[i]);
+    prev_frame_matches[i] = false;
 
     if((imgs[i] = read_frame_yuv(images_paths[i], ctx->width, ctx->height)) == NULL) {
       return EXIT_FAILURE;
@@ -278,7 +280,13 @@ int main(int argc, char **argv) {
         }
         for(int i=0; i < n_images; i++) {
           if(images_equal(fr, imgs[i])) {
-            print_images_equal(i, fr->pts, current_frame);
+            if(!prev_frame_matches[i]) {
+              prev_frame_matches[i] = true;
+              print_images_equal(i, fr->pts, current_frame);
+            }
+          }
+          else {
+            prev_frame_matches[i] = false;
           }
         }
       }
