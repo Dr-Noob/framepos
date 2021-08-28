@@ -84,7 +84,28 @@ AVFrame *read_frame_yuv(char* input_path, int w, int h) {
   return dst;
 }
 
-void print_images_equal(int img, int frame, double fps) {
+#define MPCLAMP(a, min, max) (((a) < (min)) ? (min) : (((a) > (max)) ? (max) : (a)))
+
+double get_current_time(AVFrame* fr) { return (double) fr->pts / 1000; }
+double get_time_length(AVFormatContext* fmt_ctx) { return (double) fmt_ctx->duration / AV_TIME_BASE; }
+
+double get_current_pos_ratio(AVStream *stream, AVFrame* fr, AVFormatContext* fmt_ctx) {
+  double start = 0;
+  double pos = get_current_time(fr);
+  double len = get_time_length(fmt_ctx);
+
+  double ans = MPCLAMP((pos - start) / len, 0, 1);
+
+  return ans;
+}
+
+// Inspired by mpv's mp_property_frame_number
+int get_estimated_frame_number(AVStream *stream, AVFrame* fr, AVFormatContext* fmt_ctx) {
+  int64_t frames = get_time_length(fmt_ctx) * 25; // stream->nb_frames;
+  return lrint(get_current_pos_ratio(stream, fr, fmt_ctx) * frames);
+}
+
+void print_images_equal(int img, int frame, double fps, int64_t pts) {
   // format XX:XX:XX.XX
   char* time = malloc(sizeof(char) * 12);
     
@@ -103,7 +124,7 @@ void print_images_equal(int img, int frame, double fps) {
   
   sprintf(time, "%02d:%02d:%02d.%02d", hou, min, seg, ms);
   
-  fprintf(stderr, "[IMG %d]: %s\n", img, time);    
+  fprintf(stderr, "[IMG %d]: %s (frame %d)(pts: %ld)\n", img, time, frame, pts);
   
   free(time);
 }            
@@ -142,10 +163,12 @@ int main(int argc, char **argv) {
   AVFrame *fr = NULL;
   AVFrame **imgs = malloc(sizeof(AVFrame *) * n_images);
   AVPacket pkt;
+  AVStream *stream;
   
   uint8_t *byte_buffer = NULL;
   int number_of_written_bytes;
   int video_stream;
+  int audio_stream;
   int byte_buffer_size;
   int current_frame = 0;
   int result; 
@@ -169,7 +192,13 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
+  if ((audio_stream = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0)) < 0) {
+    av_log(NULL, AV_LOG_ERROR, "av_find_best_stream\n");
+    return EXIT_FAILURE;
+  }
+
   origin_par = fmt_ctx->streams[video_stream]->codecpar;
+  stream = fmt_ctx->streams[video_stream];
   
   if ((fmt_ctx->video_codec = avcodec_find_decoder(origin_par->codec_id)) == NULL) {
     av_log(NULL, AV_LOG_ERROR, "avcodec_find_decoder\n");
@@ -193,9 +222,10 @@ int main(int argc, char **argv) {
     av_log(ctx, AV_LOG_ERROR, "avcodec_open2\n");
     return EXIT_FAILURE;
   }
- 
-  fps = av_q2d(av_guess_frame_rate(fmt_ctx, fmt_ctx->streams[video_stream], NULL));  
   
+  //fps = av_q2d(fmt_ctx->streams[video_stream]->r_frame_rate);
+  fps = av_q2d(av_guess_frame_rate(fmt_ctx, fmt_ctx->streams[video_stream], NULL));
+
   printf("%s dimensions: %dx%d\n", video_path, ctx->width, ctx->height);
   
   for(int i=0; i < n_images; i++) {
@@ -221,16 +251,20 @@ int main(int argc, char **argv) {
   
   printf("Using codec: %s\n", fmt_ctx->video_codec->name);
   av_get_pix_fmt_string(buf, MAX_PIX_FMT_STR_LENGTH, ctx->pix_fmt);
-  printf("Input video: %.2ffps\n", fps);
+  printf("Input video: %ffps\n", fps);
   printf("Input video PIX_FMT: %s\n", buf);
   if(ctx->pix_fmt != AV_PIX_FMT_YUV420P) printf("WARNING: %s was not designed to work with format different than yuv420p\n", argv[0]);
 
   av_init_packet(&pkt);
-  
+
+  // int64_t framerate = floor( 1.00 / ( ( double )stream->time_base.num / ( double )stream->time_base.den ) );
+  // static const AVRational AV_TIME_BASE_Q2 = (AVRational){1, stream->avg_frame_rate};
+  // AVRational AV_TIME_BASE_Q2 = av_make_q(1, framerate);
   printf("Using %d threads to decode\n", n_threads);
   
   // https://stackoverflow.com/questions/44711921/ffmpeg-failed-to-call-avcodec-send-packet
   while (av_read_frame(fmt_ctx, &pkt) >= 0) {
+    //if (pkt.stream_index == audio_stream)
     if (pkt.stream_index == video_stream) {
       result = avcodec_send_packet(ctx, &pkt);
       
@@ -240,25 +274,40 @@ int main(int argc, char **argv) {
       }
         
       while((result = avcodec_receive_frame(ctx, fr)) >= 0) {                                           
-        current_frame++; 
-        if(current_frame % N_FRAMES_DEBUG == 0) { 
+        /*if(fr->decode_error_flags || (fr->flags & AV_FRAME_FLAG_CORRUPT)) {
+          if(fr->flags & AV_FRAME_FLAG_CORRUPT) printf("This frame is corrupt (fr->flags & AV_FRAME_FLAG_CORRUPT)!\n");
+          if(fr->decode_error_flags == FF_DECODE_ERROR_INVALID_BITSTREAM) printf("This frame is corrupt (FF_DECODE_ERROR_INVALID_BITSTREAM)!\n");
+          if(fr->decode_error_flags == FF_DECODE_ERROR_MISSING_REFERENCE) printf("This frame is corrupt (FF_DECODE_ERROR_MISSING_REFERENCE)!\n");
+          if(fr->decode_error_flags != 0) printf("This frame is corrupt (decode_error_flags=%d)!\n", fr->decode_error_flags);
+          // continue;
+        }*/
+        current_frame = get_estimated_frame_number(stream, fr, fmt_ctx);
+        if(current_frame % N_FRAMES_DEBUG == 0) {
           printf("\r%d decoded frames...", current_frame);
           fflush(stdout);
         }
+        /*if(current_frame == 149 - 50) {
+          write_frame_yuv(fr, "debug.yuv");
+          return EXIT_SUCCESS;
+        }*/
+        // printf("frame=%d\n", current_frame);
         number_of_written_bytes = av_image_copy_to_buffer(byte_buffer, byte_buffer_size,
                                  (const uint8_t* const *)fr->data, (const int*) fr->linesize,
                                  ctx->pix_fmt, ctx->width, ctx->height, 1);
         if (number_of_written_bytes < 0) {
           av_log(NULL, AV_LOG_ERROR, "av_image_copy_to_buffer\n");
           return EXIT_FAILURE;
-        }            
+        }
         for(int i=0; i < n_images; i++) {
           if(images_equal(fr, imgs[i])) {
-            print_images_equal(i, current_frame, fps);
+            print_images_equal(i, current_frame, fps, fr->pts);
+            /*write_frame_yuv(fr, "found.yuv");
+            return EXIT_SUCCESS;*/
           }
         }
       }
-      
+
+      if(result == AVERROR(EAGAIN) || result == AVERROR_EOF || result == AVERROR(EINVAL)) av_log(NULL, AV_LOG_ERROR, "avcodec_receive_frame\n");
       if(result != AVERROR(EAGAIN) && result != AVERROR_EOF) {          
         av_log(NULL, AV_LOG_ERROR, "avcodec_receive_frame\n");  
         return EXIT_FAILURE;
