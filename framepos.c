@@ -86,12 +86,12 @@ AVFrame *read_frame_yuv(char* input_path, int w, int h) {
 
 #define MPCLAMP(a, min, max) (((a) < (min)) ? (min) : (((a) > (max)) ? (max) : (a)))
 
-double get_current_time(AVFrame* fr) { return (double) fr->pts / 1000; }
+double get_current_time(AVStream *stream, AVFrame* fr) { return (double) fr->pts * av_q2d(stream->time_base); }
 double get_time_length(AVFormatContext* fmt_ctx) { return (double) fmt_ctx->duration / AV_TIME_BASE; }
 
 double get_current_pos_ratio(AVStream *stream, AVFrame* fr, AVFormatContext* fmt_ctx) {
   double start = 0;
-  double pos = get_current_time(fr);
+  double pos = get_current_time(stream, fr);
   double len = get_time_length(fmt_ctx);
 
   double ans = MPCLAMP((pos - start) / len, 0, 1);
@@ -99,12 +99,12 @@ double get_current_pos_ratio(AVStream *stream, AVFrame* fr, AVFormatContext* fmt
   return ans;
 }
 
-int get_estimated_frame_number(AVStream *stream, AVFrame* fr, AVFormatContext* fmt_ctx) {
-  int64_t frames = get_time_length(fmt_ctx) * 25; // stream->nb_frames;
+int get_estimated_frame_number(AVStream *stream, AVFrame* fr, AVFormatContext* fmt_ctx, double fps) {
+  int64_t frames = get_time_length(fmt_ctx) * fps;
   return lrint(get_current_pos_ratio(stream, fr, fmt_ctx) * frames);
 }
 
-void print_images_equal(int img, int64_t pts) {
+void print_images_equal(int img, int64_t pts, int frame) {
   // format XX:XX:XX.XXX
   char* time = malloc(sizeof(char) * 13);
 
@@ -123,7 +123,7 @@ void print_images_equal(int img, int64_t pts) {
 
   sprintf(time, "%02d:%02d:%02d.%03d", hou, min, seg, ms);
 
-  fprintf(stderr, "[IMG %d]: %s\n", img, time);
+  fprintf(stderr, "[IMG %d]: %s (frame %d)\n", img, time, frame);
 
   free(time);
 }
@@ -262,7 +262,7 @@ int main(int argc, char **argv) {
       }
 
       while((result = avcodec_receive_frame(ctx, fr)) >= 0) {
-        current_frame = get_estimated_frame_number(stream, fr, fmt_ctx);
+        current_frame = get_estimated_frame_number(stream, fr, fmt_ctx, fps);
 
         if(current_frame % N_FRAMES_DEBUG == 0) {
           printf("\r%d decoded frames...", current_frame);
@@ -278,7 +278,7 @@ int main(int argc, char **argv) {
         }
         for(int i=0; i < n_images; i++) {
           if(images_equal(fr, imgs[i])) {
-            print_images_equal(i, fr->pts);
+            print_images_equal(i, fr->pts, current_frame);
           }
         }
       }
